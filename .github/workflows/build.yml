@@ -26,6 +26,6 @@ jobs:
         with:
           name: firmware-esp32c3
           path: |
-            build/*.bin
-            build/bootloader/*.bin
-            build/partition_table/*.bin
+            firmware/build/*.bin
+            firmware/build/bootloader/*.bin
+            firmware/build/partition_table/*.bin
