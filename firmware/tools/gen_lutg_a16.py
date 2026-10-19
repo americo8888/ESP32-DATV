@@ -219,7 +219,8 @@ def a_fill():                         # gp = ring has a symbol (not an underrun)
 
 
 def a_nsym(c, r="s5"):
-    return [f"    lw   {r}, NSYM(s0)", f"    addi {r}, {r}, -1", f"    sw   {r}, NSYM(s0)", f"    beqz {r}, .Lx{c}"], 4
+    step = -1 if REC != "none" or c == "C" else 0
+    return [f"    lw   {r}, NSYM(s0)", f"    addi {r}, {r}, {step}", f"    sw   {r}, NSYM(s0)", f"    beqz {r}, .Lx{c}"], 4
 
 
 def a_xa():                           # t6 = ring byte holding the next symbol
@@ -230,8 +231,10 @@ def a_xb():                           # nibbles: two symbols per byte, 4 bit sym
     return ["    andi t5, a7, 1", "    slli t5, t5, 2", "    srl  t6, t6, t5", "    andi t6, t6, 15", "    slli a2, a2, 4", "    or   a2, a2, t6", "    add  a7, a7, gp"], 7
 
 
-def a_under():
-    return ["    lw   t5, UNDER(s0)", "    xori t6, gp, 1", "    add  t5, t5, t6", "    sw   t5, UNDER(s0)"], 4
+def a_under(c):
+    # Replace the 32-bit counter store, preserving every timed slot's size.
+    op = "    sw   t5, UNDER(s0)" if REC != "none" else f"    bnez t5, .Ldry{c}"
+    return ["    lw   t5, UNDER(s0)", "    xori t6, gp, 1", "    add  t5, t5, t6", op], 4
 
 
 def a_nptr(g):
@@ -329,7 +332,7 @@ def copy_code(c, pads):
     sch[1] = [a_fill, a_qend]
     sch[2] = [a_xa]
     sch[3] = [a_xb]
-    sch[4] = [a_under, lambda: a_nptr(0)]
+    sch[4] = [lambda: a_under(c), lambda: a_nptr(0)]
     sch[5] = [lambda: a_nptr(1)]
     sch[6] = [lambda: a_nptr(2)]
     if c == "N":
@@ -434,6 +437,8 @@ def copy_code(c, pads):
     EFFECTIVE[f"{c}E_cost"] = s.cost
     out.append(f".Lx{c}:\n    j    lutg_a16_exit")
     stubs.append(f".Ls{c}:\n    li   t5, 2\n    sw   t5, EXITC(s0)\n    j    lutg_a16_exit")
+    if REC == "none":
+        stubs.append(f".Ldry{c}:\n    j    lutg_a16_empty")
     out += stubs
     return "\n".join(out)
 
@@ -447,6 +452,8 @@ def function():
     .type lutg_a16_run_p20, @function
     .align 4
 lutg_a16_run_p20:
+    .option push
+    .option rvc
     addi sp, sp, -64
     sw   ra, 0(sp)
     sw   s0, 4(sp)
@@ -463,6 +470,8 @@ lutg_a16_run_p20:
     sw   s11, 48(sp)
     sw   gp, 52(sp)
     sw   tp, 56(sp)
+    .option pop
+    .balign 4
     mv   s0, a0
     li   a3, 0x60043000         /* USB Serial/JTAG */
     li   a5, 0x80200            /* offset binary -> two's complement, both fields */
@@ -508,10 +517,17 @@ lutg_a16_run_p20:
 """]
     for c in COPIES:
         f.append(copy_code(c, pads))
-    f.append("""lutg_a16_exit:
+    f.append("""lutg_a16_empty:
+    li   t5, 1
+    sw   t5, UNDER(s0)
+    li   t5, 3
+    sw   t5, EXITC(s0)
+lutg_a16_exit:
     sw   s11, QW(s0)
     sw   a7, QR(s0)
     sw   a0, RECP(s0)
+    .option push
+    .option rvc
     lw   ra, 0(sp)
     lw   s0, 4(sp)
     lw   s1, 8(sp)
@@ -530,6 +546,7 @@ lutg_a16_run_p20:
     addi sp, sp, 64
     li   a0, 0
     ret
+    .option pop
     .size lutg_a16_run_p20, . - lutg_a16_run_p20
 """)
     return "\n".join(f)

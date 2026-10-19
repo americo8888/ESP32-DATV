@@ -307,8 +307,12 @@ def build_pass(c, stubs):
     at(1,0,(["    lw   tp, NSYM(s0)", f"    addi tp, tp, {step}"],2))
     at(1,1,(["    sw   tp, NSYM(s0)", f"    beqz tp, {exit_label}"],2))
     at(5,0,(["    sub  gp, s11, a7", "    addi gp, gp, -3"],2))
+    dry = lab("dry")
+    stubs[2].append(f"{dry}:\n    j    lutg_a16s8_empty")
+    # Keep the RVC add and replace the 32-bit store: sample offsets stay fixed.
+    under_op = "    sw   t4, UNDER(s0)" if REC != "none" else f"    bnez t4, {dry}"
     at(5,1,(["    slt  gp, zero, gp", "    sw   gp, NS_C(s0)", "    lw   t4, UNDER(s0)", "    xori t6, gp, 1", "    add  t4, t4, t6"],5))
-    pl[42].insert(0,(["    sw   t4, UNDER(s0)"],1))
+    pl[42].insert(0,([under_op],1))
     at(7,0,(["    lw   gp, NS_C(s0)"],1))
     at(7,1,(["    slli t4, a7, 18", "    srli t4, t4, 18", "    add  t4, t4, s4"],3),ev_adv())
     at(7,1,([f"    addi a0, a0, {4 * NSYM*S}" if REC != "none" else "    .4byte 0x00000013"],1))
@@ -482,7 +486,12 @@ lutg_a16s8_run_p20:
 """]
     for c in COPIES:
         f.append(copy_code(c, pads))
-    f.append("""lutg_a16s8_exit:
+    f.append("""lutg_a16s8_empty:
+    li   t5, 1
+    sw   t5, UNDER(s0)
+    li   t5, 3
+    sw   t5, EXITC(s0)
+lutg_a16s8_exit:
     sw   s11, QW(s0)
     sw   a7, QR(s0)
     sw   a0, RECP(s0)

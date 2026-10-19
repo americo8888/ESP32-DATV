@@ -229,7 +229,7 @@ lutg_a32_s32_run_p20:
     lw ra, 52(s0)
     nop
     add ra, ra, a0
-    sw ra, 52(s0)
+    bnez ra, .Llutg_a32_s32_run_p20_N0_dry
     c.nop
 /* S=32 N0 sample 6 */
     sw t6, 0(a6)
@@ -770,6 +770,8 @@ lutg_a32_s32_run_p20:
     beqz ra, .Llutg_a32_s32_run_p20_exit
     nop
     jalr x0, 0(a0)
+.Llutg_a32_s32_run_p20_N0_dry:
+    j .Llutg_a32_s32_run_p20_empty
 .Llutg_a32_s32_run_p20_N0_cached:
     li s8, 0
     c.nop
@@ -960,7 +962,7 @@ lutg_a32_s32_run_p20:
     lw ra, 52(s0)
     nop
     add ra, ra, a0
-    sw ra, 52(s0)
+    bnez ra, .Llutg_a32_s32_run_p20_N1_dry
     c.nop
 /* S=32 N1 sample 6 */
     sw t6, 0(a6)
@@ -1501,6 +1503,8 @@ lutg_a32_s32_run_p20:
     beqz ra, .Llutg_a32_s32_run_p20_exit
     nop
     jalr x0, 0(a0)
+.Llutg_a32_s32_run_p20_N1_dry:
+    j .Llutg_a32_s32_run_p20_empty
 .Llutg_a32_s32_run_p20_N1_cached:
     li s2, 0
     c.nop
@@ -1691,7 +1695,7 @@ lutg_a32_s32_run_p20:
     lw ra, 52(s0)
     nop
     add ra, ra, a0
-    sw ra, 52(s0)
+    bnez ra, .Llutg_a32_s32_run_p20_M0_dry
     c.nop
 /* S=32 M0 sample 6 */
     sw t6, 0(a6)
@@ -2234,6 +2238,8 @@ lutg_a32_s32_run_p20:
     beqz ra, .Llutg_a32_s32_run_p20_exit
     nop
     jalr x0, 0(a0)
+.Llutg_a32_s32_run_p20_M0_dry:
+    j .Llutg_a32_s32_run_p20_empty
 .Llutg_a32_s32_run_p20_M0_clamp:
     bgtz a0, .Llutg_a32_s32_run_p20_M0_clamphigh
     lw ra, 56(s0)
@@ -2409,7 +2415,7 @@ lutg_a32_s32_run_p20:
     lw ra, 52(s0)
     nop
     add ra, ra, a0
-    sw ra, 52(s0)
+    bnez ra, .Llutg_a32_s32_run_p20_M1_dry
     lbu a0, 120(s0)
 
 /* S=32 M1 sample 6 */
@@ -2945,6 +2951,8 @@ lutg_a32_s32_run_p20:
     beqz ra, .Llutg_a32_s32_run_p20_exit
     nop
     jalr x0, 0(a0)
+.Llutg_a32_s32_run_p20_M1_dry:
+    j .Llutg_a32_s32_run_p20_empty
 .Llutg_a32_s32_run_p20_M1_clamp:
     bgtz a0, .Llutg_a32_s32_run_p20_M1_clamphigh
     lw ra, 56(s0)
@@ -2955,6 +2963,11 @@ lutg_a32_s32_run_p20:
 .Llutg_a32_s32_run_p20_M1_clamphigh:
     li a0, 32
     j .Llutg_a32_s32_run_p20_M1_clampback
+.Llutg_a32_s32_run_p20_empty:
+    li ra, 1
+    sw ra, 52(s0)
+    li ra, 3
+    sw ra, 108(s0)
 .Llutg_a32_s32_run_p20_exit:
     sw a7, 32(s0)
     lw ra, 0(sp)

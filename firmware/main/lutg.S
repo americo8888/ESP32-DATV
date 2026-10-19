@@ -40,6 +40,8 @@
     .type lutg_run_p20, @function
     .align 4
 lutg_run_p20:
+    .option push
+    .option rvc
     addi sp, sp, -64
     sw   ra, 0(sp)
     sw   s0, 4(sp)
@@ -56,6 +58,8 @@ lutg_run_p20:
     sw   s11, 48(sp)
     sw   gp, 52(sp)
     sw   tp, 56(sp)
+    .option pop
+    .balign 4
     mv   s0, a0
     li   a3, 0x60043000         /* USB Serial/JTAG */
     li   a5, 0x80200            /* offset binary -> two's complement, both fields */
@@ -204,7 +208,7 @@ lutg20_copy_N:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryN20
     lw   s9, T0(s0)
     slli tp, a2, 2
     andi tp, tp, 60
@@ -341,7 +345,7 @@ lutg20_copy_N:
     add  t0, t0, t2
     add  t0, t0, t4
     xor  t3, t0, a5
-    addi tp, tp, -1
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .LxN20
     lw   t5, S64M(s0)
@@ -456,6 +460,8 @@ lutg20_copy_N:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg20_exit
+.LdryN20:
+    j    lutg20_empty
     .align 4
 lutg20_copy_A:
     .rept 24
@@ -560,7 +566,7 @@ lutg20_copy_A:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryA20
     lw   s9, T0(s0)
     slli tp, a2, 2
     andi tp, tp, 60
@@ -696,7 +702,7 @@ lutg20_copy_A:
     add  t0, t0, t2
     add  t0, t0, t4
     xor  t3, t0, a5
-    addi tp, tp, -1
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .LxA20
     lw   t5, S64M(s0)
@@ -806,6 +812,8 @@ lutg20_copy_A:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg20_exit
+.LdryA20:
+    j    lutg20_empty
     .align 4
 lutg20_copy_B:
     .rept 24
@@ -910,7 +918,7 @@ lutg20_copy_B:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryB20
     lw   s9, T0(s0)
     slli tp, a2, 2
     andi tp, tp, 60
@@ -1028,7 +1036,7 @@ lutg20_copy_B:
     add  t0, t0, t2
     add  t0, t0, t4
     xor  t3, t0, a5
-    addi tp, tp, -1
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .LxB20
     lw   t5, S64M(s0)
@@ -1138,6 +1146,8 @@ lutg20_copy_B:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg20_exit
+.LdryB20:
+    j    lutg20_empty
     .align 4
 lutg20_copy_C:
     .rept 24
@@ -1242,7 +1252,7 @@ lutg20_copy_C:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryC20
     lw   s9, T0(s0)
     slli tp, a2, 2
     andi tp, tp, 60
@@ -1468,10 +1478,19 @@ lutg20_copy_C:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg20_exit
+.LdryC20:
+    j    lutg20_empty
+lutg20_empty:
+    li   t5, 1
+    sw   t5, UNDER(s0)
+    li   t5, 3
+    sw   t5, EXITC(s0)
 lutg20_exit:
     sw   s11, QW(s0)
     sw   a7, QR(s0)
     sw   a0, RECP(s0)
+    .option push
+    .option rvc
     lw   ra, 0(sp)
     lw   s0, 4(sp)
     lw   s1, 8(sp)
@@ -1490,6 +1509,7 @@ lutg20_exit:
     addi sp, sp, 64
     li   a0, 0
     ret
+    .option pop
     .size lutg_run_p20, . - lutg_run_p20
 
 
@@ -1497,6 +1517,8 @@ lutg20_exit:
     .type lutg_run_p24, @function
     .align 4
 lutg_run_p24:
+    .option push
+    .option rvc
     addi sp, sp, -64
     sw   ra, 0(sp)
     sw   s0, 4(sp)
@@ -1513,6 +1535,8 @@ lutg_run_p24:
     sw   s11, 48(sp)
     sw   gp, 52(sp)
     sw   tp, 56(sp)
+    .option pop
+    .balign 4
     mv   s0, a0
     li   a3, 0x60043000         /* USB Serial/JTAG */
     li   a5, 0x80200            /* offset binary -> two's complement, both fields */
@@ -1670,7 +1694,7 @@ lutg24_copy_N:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryN24
     lw   s9, T0(s0)
     slli tp, a2, 2
     andi tp, tp, 60
@@ -1813,7 +1837,7 @@ lutg24_copy_N:
     add  t0, t0, t2
     add  t0, t0, t4
     xor  t3, t0, a5
-    addi tp, tp, -1
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .LxN24
     lw   t5, S64M(s0)
@@ -1928,6 +1952,8 @@ lutg24_copy_N:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg24_exit
+.LdryN24:
+    j    lutg24_empty
     .align 4
 lutg24_copy_A:
     .rept 24
@@ -2041,7 +2067,7 @@ lutg24_copy_A:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryA24
     lw   s9, T0(s0)
     slli tp, a2, 2
     andi tp, tp, 60
@@ -2186,7 +2212,7 @@ lutg24_copy_A:
     add  t0, t0, t2
     add  t0, t0, t4
     xor  t3, t0, a5
-    addi tp, tp, -1
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .LxA24
     lw   t5, S64M(s0)
@@ -2296,6 +2322,8 @@ lutg24_copy_A:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg24_exit
+.LdryA24:
+    j    lutg24_empty
     .align 4
 lutg24_copy_B:
     .rept 24
@@ -2409,7 +2437,7 @@ lutg24_copy_B:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryB24
     lw   s9, T0(s0)
     slli tp, a2, 2
     andi tp, tp, 60
@@ -2542,7 +2570,7 @@ lutg24_copy_B:
     add  t0, t0, t2
     add  t0, t0, t4
     xor  t3, t0, a5
-    addi tp, tp, -1
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .LxB24
     lw   t5, S64M(s0)
@@ -2652,6 +2680,8 @@ lutg24_copy_B:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg24_exit
+.LdryB24:
+    j    lutg24_empty
     .align 4
 lutg24_copy_C:
     .rept 24
@@ -2765,7 +2795,7 @@ lutg24_copy_C:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryC24
     lw   s9, T0(s0)
     slli tp, a2, 2
     andi tp, tp, 60
@@ -3006,10 +3036,19 @@ lutg24_copy_C:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg24_exit
+.LdryC24:
+    j    lutg24_empty
+lutg24_empty:
+    li   t5, 1
+    sw   t5, UNDER(s0)
+    li   t5, 3
+    sw   t5, EXITC(s0)
 lutg24_exit:
     sw   s11, QW(s0)
     sw   a7, QR(s0)
     sw   a0, RECP(s0)
+    .option push
+    .option rvc
     lw   ra, 0(sp)
     lw   s0, 4(sp)
     lw   s1, 8(sp)
@@ -3028,5 +3067,6 @@ lutg24_exit:
     addi sp, sp, 64
     li   a0, 0
     ret
+    .option pop
     .size lutg_run_p24, . - lutg_run_p24
 

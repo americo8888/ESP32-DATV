@@ -426,6 +426,11 @@ def main(argv=None):
     link = None
     stop_enc = threading.Event()
     try:
+        # Encode before requesting RF: new firmware acknowledges while muted,
+        # then waits for the first buffer of valid symbols.
+        ready = queue.Queue(maxsize=48)
+        cw_byte = (0xFF if a.mod == "qpsk" else 0x00) if a.cw else None
+        threading.Thread(target=feed_symbols, args=(ready, stop_enc, src, enc, cw_byte), daemon=True).start()
         link = esp_link.Link(esp_link.find_port(a.port))
         src.check()
         link.configure_pa(a.pa_enable)
@@ -435,7 +440,7 @@ def main(argv=None):
                else " %d %d" % tuple(round(100 * x) for x in dvbs2.APSK32_GAMMA[a.fec]) if a.mod == "32apsk" else "")     # R2 / R1 and R3 / R1 x 100
         info = link.start(f"{cmd} {khz / 1000:.3f} {a.baud} {a.sps} {a.amp} {secs} {a.ifm} {a.target} {dc4[0]} {dc4[1]} {gq} {ph}{gam}")
         kv = dict(zip(info.split()[2::2], info.split()[3::2]))
-        if link.pa_gpio is not None and kv.get("PA") != str(int(a.pa_enable)):
+        if link.pa_gpio is not None and kv.get("PA_ARMED", kv.get("PA")) != str(int(a.pa_enable)):
             raise SystemExit("ESP PA enable output does not match the requested state")
         if a.mod == "32apsk" and a.apsk_pl == "unit" and int(kv.get("PLPTS", "0")) < 4:
             raise SystemExit("This firmware has no unit-radius PL points; build and flash firmware/ first")
@@ -449,9 +454,6 @@ def main(argv=None):
         buf = b""
         # The encoder runs in its own thread, ahead of the USB writes: the kernel takes about one write at a time, so encoding between two writes leaves the
         # link idle (a loop that encodes and writes alternately delivered 360 kB/s, a pre-encoded stream 420 kB/s)
-        ready = queue.Queue(maxsize=48)
-        cw_byte = (0xFF if a.mod == "qpsk" else 0x00) if a.cw else None
-        threading.Thread(target=feed_symbols, args=(ready, stop_enc, src, enc, cw_byte), daemon=True).start()
         t_start = t_rep = time.time()
         fmin, fmax = 10 ** 9, 0
         while not a.seconds or time.time() - t_start < a.seconds:
@@ -485,9 +487,11 @@ def main(argv=None):
         pass
     finally:
         stop_enc.set()
-        src.close()
-        if link is not None:
-            print(link.finish(send_stop=not (a16s8 or a32fast)))
+        try:
+            if link is not None:
+                print(link.finish(send_stop=not (a16s8 or a32fast)))
+        finally:
+            src.close()  # FFmpeg shutdown must not delay muting the transmitter
 
 
 if __name__ == "__main__":

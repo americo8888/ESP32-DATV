@@ -242,7 +242,9 @@ def a_fill():                         # gp = ring has a symbol (not an underrun)
 
 
 def a_nsym(c, r="s5"):                # symbols left; leave when done (s5..s8 are free until the next-pointer events write them)
-    return [f"    lw   {r}, NSYM(s0)", f"    addi {r}, {r}, -1", f"    sw   {r}, NSYM(s0)", f"    beqz {r}, .Lx{c}{CUR_P}"], 4
+    # Production counts N*mper + A/B/C blocks; recording still counts symbols.
+    step = -1 if REC != "none" or c == "C" else 0
+    return [f"    lw   {r}, NSYM(s0)", f"    addi {r}, {r}, {step}", f"    sw   {r}, NSYM(s0)", f"    beqz {r}, .Lx{c}{CUR_P}"], 4
 
 
 def a_xa():                           # t6 = ring byte holding the next symbol
@@ -255,8 +257,10 @@ def a_xb():                           # take the symbol out of the byte, shift i
     return ["    andi t5, a7, 3", "    slli t5, t5, 1", "    srl  t6, t6, t5", "    andi t6, t6, 3", "    slli a2, a2, 2", "    or   a2, a2, t6", "    add  a7, a7, gp"], 7
 
 
-def a_under():
-    return ["    lw   t5, UNDER(s0)", "    xori t6, gp, 1", "    add  t5, t5, t6", "    sw   t5, UNDER(s0)"], 4
+def a_under(c):
+    # Replace the 32-bit counter store, preserving every timed slot's size.
+    op = "    sw   t5, UNDER(s0)" if REC != "none" else f"    bnez t5, .Ldry{c}{CUR_P}"
+    return ["    lw   t5, UNDER(s0)", "    xori t6, gp, 1", "    add  t5, t5, t6", op], 4
 
 
 def a_nptr(g, r=("t5", "t6")):        # next symbol's row pointer of group g: T_g + 4 * ((C >> 4g) & 15)
@@ -361,7 +365,7 @@ def copy_code(P, c, pads):
     sch[1] = [a_fill]
     sch[2] = [a_xa]
     sch[3] = [a_xb]
-    sch[4] = [a_under, lambda: a_nptr(0, ("tp", "s9"))]
+    sch[4] = [lambda: a_under(c), lambda: a_nptr(0, ("tp", "s9"))]
     sch[5] = [lambda: a_nptr(1), lambda: a_nptr(2, ("tp", "s9"))]
     if PSK8:
         sch[1] = [a_fill, a_qend]        # a_qend needs s1 before a_adj
@@ -492,6 +496,8 @@ def copy_code(P, c, pads):
     EFFECTIVE.setdefault(str(P), {})[f"{c}E_cost"] = s.cost
     out.append(f".Lx{c}{P}:\n    j    lutg{P}_exit")
     stubs.append(f".Ls{c}{P}:\n    li   t5, 2\n    sw   t5, EXITC(s0)\n    j    lutg{P}_exit")
+    if REC == "none":
+        stubs.append(f".Ldry{c}{P}:\n    j    lutg{P}_empty")
     out += stubs
     return "\n".join(out), sled_end
 
@@ -506,6 +512,8 @@ def function(P):
     .type {FN}{P}, @function
     .align 4
 {FN}{P}:
+    .option push
+    .option rvc
     addi sp, sp, -64
     sw   ra, 0(sp)
     sw   s0, 4(sp)
@@ -522,6 +530,8 @@ def function(P):
     sw   s11, 48(sp)
     sw   gp, 52(sp)
     sw   tp, 56(sp)
+    .option pop
+    .balign 4
     mv   s0, a0
     li   a3, 0x60043000         /* USB Serial/JTAG */
     li   a5, 0x80200            /* offset binary -> two's complement, both fields */
@@ -570,10 +580,17 @@ def function(P):
     for c in COPIES:
         code, end = copy_code(P, c, pads)
         f.append(code)
-    f.append(f"""lutg{P}_exit:
+    f.append(f"""lutg{P}_empty:
+    li   t5, 1
+    sw   t5, UNDER(s0)
+    li   t5, 3
+    sw   t5, EXITC(s0)
+lutg{P}_exit:
     sw   s11, QW(s0)
     sw   a7, QR(s0)
     sw   a0, RECP(s0)
+    .option push
+    .option rvc
     lw   ra, 0(sp)
     lw   s0, 4(sp)
     lw   s1, 8(sp)
@@ -592,6 +609,7 @@ def function(P):
     addi sp, sp, 64
     li   a0, 0
     ret
+    .option pop
     .size {FN}{P}, . - {FN}{P}
 """)
     return "\n".join(f)

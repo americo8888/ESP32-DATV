@@ -32,10 +32,14 @@ class Link:
             self.s.write(b"\nINFO\n")
             t0 = time.time()
             got = b""
-            while time.time() - t0 < 0.7 and b"ESP32DATV" not in got:
+            while time.time() - t0 < 0.7:
                 got += self.s.read(4096)
+                if any(line.startswith(b"ESP32DATV ") and line.endswith(b"\n")
+                       for line in got.splitlines(keepends=True)):
+                    break
                 time.sleep(0.02)
-            if b"ESP32DATV" in got:
+            if any(line.startswith(b"ESP32DATV ") and line.endswith(b"\n")
+                   for line in got.splitlines(keepends=True)):
                 break
         else:
             raise SystemExit("the ESP does not answer INFO (flash firmware/ first, or reset the board)")
@@ -45,6 +49,8 @@ class Link:
         fields = info.split()[2:]
         capabilities = dict(zip(fields[::2], fields[1::2]))
         self.pa_gpio = int(capabilities["PA_GPIO"]) if "PA_GPIO" in capabilities else None
+        self.clean_tx = capabilities.get("CLEAN_TX") == "1"
+        self.streaming = False
         self.s.reset_input_buffer()
         self.buf = b""
         self.text = b""
@@ -65,7 +71,8 @@ class Link:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self.poll()
-            for line in self.text.decode(errors="replace").splitlines():
+            for line in self.text.decode(errors="replace").split("\n")[:-1]:
+                line = line.rstrip("\r")
                 if line == expected:
                     self.text = b""
                     return
@@ -99,8 +106,11 @@ class Link:
         t0 = time.time()
         while time.time() - t0 < timeout:
             self.poll()
-            for ln in self.text.decode(errors="replace").splitlines():
+            for ln in self.text.decode(errors="replace").split("\n")[:-1]:
+                ln = ln.rstrip("\r")
                 if ln.startswith("OK QPSKT"):
+                    fields = ln.split()[2:]
+                    self.streaming = int(dict(zip(fields[::2], fields[1::2])).get("TARGET", "0")) > 0
                     return ln
                 if ln.startswith("ERR"):
                     raise SystemExit(f"ESP: {ln}")
@@ -113,11 +123,12 @@ class Link:
     def finish(self, timeout=5.0, send_stop=True):
         """Wait for TX END, optionally sending the legacy stop marker.
 
-        Full-packet transmitters use send_stop=False: a short write would violate
-        their 64-byte input contract. Streaming stops after 0.5 s without input.
+        CLEAN_TX firmware shuts RF off when its symbol buffer drains. Never
+        append a stop marker to that raw stream: it would be transmitted as data.
+        Legacy firmware and on-device PRBS mode retain their previous stop path.
         """
         try:
-            if send_stop:
+            if send_stop and not (self.clean_tx and self.streaming):
                 self.s.write(b"\xA5\xFF")
         except serial.SerialException:
             pass

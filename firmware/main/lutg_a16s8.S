@@ -1193,7 +1193,7 @@ lutg_a16s8_copy_N2:
     add  t0, t0, t1
     add  t0, t0, t2
     xor  t3, t0, a5
-    sw   t4, UNDER(s0)
+    bnez t4, .Ldry74
     lw   s3, T2(s0)
     lw   tp, 0(s1)
     lw   t4, 0(s2)
@@ -1366,6 +1366,8 @@ lutg_a16s8_copy_N2:
     .endr
     .option pop
     j    .Lrb54
+.Ldry74:
+    j    lutg_a16s8_empty
 .LhN2:
     bgtz t5, .LhN2e
     lw   t6, LATE(s0)
@@ -2027,7 +2029,7 @@ lutg_a16s8_copy_M0:
     andi t6, t6, -32
     add  s2, s2, t6
     sw   tp, NSYM(s0)
-    beqz tp, .Lx74
+    beqz tp, .Lx75
     .option push
     .option rvc
     .rept 4
@@ -2169,7 +2171,7 @@ lutg_a16s8_copy_M0:
     .endr
     .option pop
     jalr x0, 0(t6)
-.Lx74:
+.Lx75:
     j    lutg_a16s8_exit
 .LhM0:
     bgtz t5, .LhM0e
@@ -2330,7 +2332,7 @@ lutg_a16s8_copy_M1:
     add  t0, t0, t1
     add  t0, t0, t2
     xor  t3, t0, a5
-    bltu t5, t6, .Ls75
+    bltu t5, t6, .Ls77
     snez t6, s11
     neg  t6, t6
     nop
@@ -2575,7 +2577,7 @@ lutg_a16s8_copy_M1:
     .endr
     .option pop
     jalr x0, 0(t6)
-.Ls75:
+.Ls77:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg_a16s8_exit
@@ -2852,7 +2854,7 @@ lutg_a16s8_copy_M2:
     add  t0, t0, t1
     add  t0, t0, t2
     xor  t3, t0, a5
-    sw   t4, UNDER(s0)
+    bnez t4, .Ldry76
     lw   s3, T2(s0)
     lw   tp, 0(s1)
     lw   t4, 0(s2)
@@ -2968,6 +2970,8 @@ lutg_a16s8_copy_M2:
     .endr
     .option pop
     jalr x0, 0(t6)
+.Ldry76:
+    j    lutg_a16s8_empty
 .LhM2:
     bgtz t5, .LhM2e
     lw   t6, LATE(s0)
@@ -3359,6 +3363,11 @@ lutg_a16s8_copy_M3:
 .LhM3e:
     li   t5, 32
     j    .LbM3
+lutg_a16s8_empty:
+    li   t5, 1
+    sw   t5, UNDER(s0)
+    li   t5, 3
+    sw   t5, EXITC(s0)
 lutg_a16s8_exit:
     sw   s11, QW(s0)
     sw   a7, QR(s0)

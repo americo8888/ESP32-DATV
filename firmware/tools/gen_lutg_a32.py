@@ -105,7 +105,11 @@ def function(S):
         event(2, [f"srli a0, a0, {mask_shift}", "add a0, a0, a3", "lbu a0, 0(a0)", f"neg ra, {flag}", "and a0, a0, ra"], 5)
         event(3, ["andi a0, a0, 63", "sltiu ra, a0, 36", "slli ra, ra, 5", "ori ra, ra, 31", "and a0, a0, ra"])
         event(4, ["slli a1, a1, 6", "or a1, a1, a0", f"add a7, a7, {flag}", f"xori a0, {flag}, 1", f"lw {nxt[4]}, {C['RLIM']}(s0)"])
-        under = [f"lw ra, {C['UNDER']}(s0)", "nop", "add ra, ra, a0", f"sw ra, {C['UNDER']}(s0)"]
+        dry = f".L{name}_{path}_dry"
+        stubs += [f"{dry}:", f"    j .L{name}_empty"]
+        # Keep the RVC add and replace the 32-bit store: sample offsets stay fixed.
+        under_op = f"sw ra, {C['UNDER']}(s0)" if a.rec != "none" else f"bnez ra, {dry}"
+        under = [f"lw ra, {C['UNDER']}(s0)", "nop", "add ra, ra, a0", under_op]
         if path == "M1":
             under += [f"lbu a0, {C['HI']}(s0)"]
         event(5, under)
@@ -217,6 +221,7 @@ def function(S):
                 emit("\n".join(nops(padding)))
                 used[f"{S}_{key}"] = padding
         emit("\n".join(stubs))
+    emit(f".L{name}_empty:\n    li ra, 1\n    sw ra, {C['UNDER']}(s0)\n    li ra, 3\n    sw ra, {C['EXIT']}(s0)")
     emit(f"{exit_label}:\n    sw a7, {C['QR']}(s0)")
     for i, reg in enumerate(saved):
         emit(f"    lw {reg}, {4 * i}(sp)")

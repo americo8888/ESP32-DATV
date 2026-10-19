@@ -44,6 +44,7 @@
 #include "heap_memory_layout.h"
 #include "soc/soc.h"
 #include "sample_clock.h"
+#include "tx_duration.h"
 
 /* RF dump bank (ADC capture / DAC playback, librftest adctrig / dactrig):
  * data at 0x3FCB0000. Handing the bank to the RF block (0x600C1020) takes
@@ -116,6 +117,20 @@ static void say(const char *fmt, ...) {
 static void usb_drain_rx(void) {
     uint8_t c;
     while (usb_serial_jtag_ll_read_rxfifo(&c, 1)) {}
+}
+
+/* Receive the initial symbols with RF and external PA still off. The ACK is
+ * sent first so older streaming hosts can start supplying raw bytes too. */
+static uint32_t usb_prefill(uint8_t *ring, uint32_t count, uint32_t mask, uint32_t seed) {
+    const int64_t deadline = esp_timer_get_time() + 3000000;
+    uint32_t n = 0;
+    while (n < count) {
+        uint8_t byte;
+        if (usb_serial_jtag_ll_read_rxfifo(&byte, 1)) ring[(seed + n++) & mask] = byte;
+        else if (esp_timer_get_time() > deadline) return 0;
+        else vTaskDelay(1);
+    }
+    return n;
 }
 
 /* ------------------------------------------------------------ radio */
@@ -226,7 +241,7 @@ static float rrc_pulse(float t, float b) {
  *   slot 3   B: time / stop checks every 2048 symbols
  * The stream is RAW symbol bytes (4 per byte, bit 0 = I, bit 1 = Q level, 1 = +1, first symbol in the low bits): no frames and no
  * parser, so there is nothing to resynchronise. USB is reliable and the ring is only read when it has room; a host that goes quiet
- * for 0.5 s (3 s before the first byte) switches the transmitter off. Up to one byte per symbol can be read (the stream needs 0.25).
+ * stops RF as soon as its symbol buffer drains. Up to one byte per symbol can be read (the stream needs 0.25).
  * Define LUT_STATS for lateness statistics (they cost registers and cycles, so they change what is measured). */
 #define LUT_STATS 1      /* development: lateness statistics (they cost cycles themselves) */
 typedef struct {
@@ -236,6 +251,7 @@ typedef struct {
 } lut_io_t;
 
 #define LUT_RING_BYTES 16384u        /* symbol ring, 64 Ki symbols, from the heap (.bss must stay below the RF dump bank) */
+static uint32_t stream_prefill;
 
 static inline void IRAM_ATTR lut_report(uint32_t fill_pairs, uint32_t under) {
     if (!USB_SERIAL_JTAG.ep1_conf.serial_in_ep_data_free) return;
@@ -251,6 +267,7 @@ static inline __attribute__((always_inline)) uint32_t IRAM_ATTR lut_run(lut_io_t
     const uint32_t S = LUT_ROW_SHIFT(SPS);
     const uint8_t *T1 = T + 256u * SPS * 4u, *T2 = T1 + 256u * SPS * 4u;
     uint32_t C = 0, bits = 0, nleft = 1, rng = 0x2545F491u, tn = ccount() + 8000u, chk = 1024, passes = 0, qw = 0, qr = 0, qw_seen = 0, under = 0, pops = 0;
+    qw = stream_prefill;
     uint32_t t_rx = ccount();
 #ifdef LUT_STATS
     uint32_t lt = 0, mx = 0;
@@ -298,9 +315,7 @@ static inline __attribute__((always_inline)) uint32_t IRAM_ATTR lut_run(lut_io_t
                         if (((++pops) & 255u) == 0) lut_report((qw - qr) >> 1, under);
                     } else {
                         ++under;
-                        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
-                        bits = rng;
-                        nleft = 8;
+                        goto lut_out;  /* no substitute symbols on air after USB drains */
                     }
                     __asm__ volatile("" : "+r"(bits), "+r"(nleft), "+r"(rng) : : "memory");
                 } else if (have && qw - qr < LUT_RING_BYTES - 64u) {      /* ring full: USB holds the PC back */
@@ -319,7 +334,7 @@ static inline __attribute__((always_inline)) uint32_t IRAM_ATTR lut_run(lut_io_t
                         if (qw != qw_seen) { qw_seen = qw; t_rx = t; }
                         else if (t - t_rx > (qw ? CPU_HZ / 2 : 3 * CPU_HZ)) goto lut_out;
                     }
-                    if (passes * 2048u > max_sym) goto lut_out;
+                    if (passes >= max_sym) goto lut_out; /* limit counts 2048-symbol blocks */
                 }
                 __asm__ volatile("" : : : "memory");
             }
@@ -354,7 +369,7 @@ typedef struct {
     uint8_t *ring;             /*  8 */
     uint32_t qw, qr;           /* 12, 16 */
     uint32_t tn;               /* 20: start of the first symbol (cycle counter) */
-    uint32_t nsp;              /* 24: superpasses (8 symbols) to run */
+    uint32_t nsp;              /* 24: 2048-symbol maintenance blocks to run */
     uint32_t under;            /* 28 */
     uint32_t mper, mcnt;       /* 32, 36: maintenance period / countdown (superpasses) */
     uint32_t trx, qwseen;      /* 40, 44: last time a USB byte arrived */
@@ -371,15 +386,17 @@ static uint32_t tx_lut8(lut8_ctx_t *c, uint8_t *ring, const int32_t *T, uint32_t
     c->t0 = T;
     c->t1 = T + 256 * 8;
     c->ring = ring;
-    c->nsp = max_sym / 8 + 1;
-    c->mper = c->mcnt = 256;                   /* report every 2048 symbols */
+    c->qw = c->qr = tx_counter_seed(0);
+    c->qw += stream_prefill;
+    c->nsp = max_sym;
+    c->mper = 256; c->mcnt = 255;              /* 255 normal + 1 maintenance pass = 2048 symbols */
     c->lim = 3 * CPU_HZ;
     c->lim1 = CPU_HZ / 2;
     c->tn = ccount() + 20000;
     c->trx = c->tn;
     const uint32_t nsp0 = c->nsp;
     lut8_run(c);
-    return (nsp0 - c->nsp) * 8;
+    return (nsp0 - c->nsp) * 2048u;
 }
 
 /* ------------------------------------------------------------ generic 8 / 6.67 MS/s modulator (lutg.S, generated by gen_lutg.py)
@@ -398,7 +415,7 @@ typedef struct {
     uint8_t *ring;             /*  16 */
     uint32_t qw, qr;           /*  20, 24: ring bytes written, symbols read (free running) */
     uint32_t tn;               /*  28: start of the first symbol (cycle counter) */
-    uint32_t nsym;             /*  32: symbols left */
+    uint32_t nsym;             /*  32: maintenance blocks left (symbols in recording builds) */
     uint32_t under;            /*  36 */
     uint32_t mper, mcnt;       /*  40, 44: maintenance period / countdown (symbols) */
     uint32_t trx, qwseen;      /*  48, 52: last time a USB byte arrived */
@@ -459,6 +476,7 @@ static uint32_t tx_a32_fast(a32_fast_ctx_t *c, lut_io_t *io, uint8_t *ring, cons
             c->row[g][v] = T + (g * LUTA32_POINTS + v) * S;
     const uint32_t bytes = LUT_RING_A32;
     c->ring = ring; c->rec = rec; c->count = limit;
+    c->qw = stream_prefill;
     c->mper = c->mcnt = 1024u;
     c->rlim = bytes - 64u;
     c->lim0 = c->limit = 3u * CPU_HZ; c->lim1 = CPU_HZ / 2u;
@@ -522,6 +540,9 @@ static uint32_t tx_lutg(lutg_ctx_t *c, uint8_t *ring, const int32_t *T, uint32_t
     for (uint32_t g = 0; g < 4; ++g) c->t[g] = a16 ? T + g * 256 * S : T + g * S * (psk8 ? 64 : 16) + (p8s8 ? 256 : 0);       /* words per group: rows (16, 8PSK 64, 16APSK 256) * S */
     c->ring = ring;
     c->nsym = max_sym;
+    const unsigned ring_shift = p8s8 || a16s8 ? 0u : psk8 || a16 ? 1u : 2u;
+    c->qw = tx_counter_seed(ring_shift); c->qr = c->qw << ring_shift;
+    c->qw += stream_prefill;
     c->mper = c->mcnt = mper;                                        /* symbols between maintenance passes (silence check, fill report) */
     c->lim = 3 * CPU_HZ;
     c->lim1 = CPU_HZ / 2;
@@ -566,9 +587,10 @@ static uint32_t tx_lutg(lutg_ctx_t *c, uint8_t *ring, const int32_t *T, uint32_t
     __asm__ volatile("csrw mtvec, %0" :: "r"(mtvec0));
 #endif
 #ifndef LUTG_REC
-    if (a16s8) return (n0 - c->nsym) * 8u * (mper + 1u);
-#endif
+    return (n0 - c->nsym) * (p8s8 || a16s8 ? 8u * (mper + 1u) : mper + 3u);
+#else
     return n0 - c->nsym;
+#endif
 }
 
 /* ------------------------------------------------------------ narrowband 8PSK (C loop with rational cycle-counter deadlines, at least 75 cycles per sample)
@@ -582,6 +604,8 @@ static uint32_t IRAM_ATTR __attribute__((noinline)) tx_p8_c(lut_io_t *io, uint8_
     const uint32_t gs = 64u * S;                                     /* words from one group's tables to the next */
     const int32_t *r0 = T, *r1 = T + gs, *r2 = T + 2u * gs, *r3 = T + 3u * gs, *n0 = r0, *n1 = r1, *n2 = r2, *n3 = r3;
     uint32_t C = 0, qw = 0, qr = 0, under = 0, late = 0, nsym = 0, tn = ccount() + 20000u, qw_seen = 0, t_rx = ccount(), pops = 0;
+    qw = tx_counter_seed(1); qr = qw << 1;
+    qw += stream_prefill;
     uint32_t phase = 0;                                             /* continuous across symbols, maintenance, and cycle-counter wrap */
     bool have = false;
     uint32_t repw = 0, repn = 0;                                     /* report: four bytes plus a flush, each in a separate slot from USB RX */
@@ -603,7 +627,7 @@ static uint32_t IRAM_ATTR __attribute__((noinline)) tx_p8_c(lut_io_t *io, uint8_
             if (j == 0) {                                            /* the symbol that the next one's history needs */
                 uint32_t sym = 0;
                 if ((int32_t)(2u * qw - qr) > 0) { sym = (qb[(qr >> 1) & (LUT_RING_BYTES - 1u)] >> ((qr & 1u) * 4u)) & 7u; ++qr; }
-                else ++under;
+                else { ++under; goto out; }
                 C = ((C << 3) | sym) & 0xFFFFFFu;
             } else if (j == 1) {
                 n0 = T + (C & 63u);
@@ -613,18 +637,20 @@ static uint32_t IRAM_ATTR __attribute__((noinline)) tx_p8_c(lut_io_t *io, uint8_
                 n3 = T + 3u * gs + ((C >> 18) & 63u);
             }
             if ((j & 7u) == 3u) have = USB_SERIAL_JTAG.ep1_conf.serial_out_ep_data_avail;          /* the USB registers are slow: look in one slot, read in another */
-            else if ((j & 7u) == 5u && have && qw - (qr >> 1) < LUT_RING_BYTES - 64u) {            /* ring full: USB holds the PC back */
+            else if ((j & 7u) == 5u && have && tx_ring_bytes(qw, qr, 1) < LUT_RING_BYTES - 64u) { /* ring full: USB holds the PC back */
                 qb[qw & (LUT_RING_BYTES - 1u)] = (uint8_t)USB_SERIAL_JTAG.ep1.val;
                 ++qw;
                 have = false;
             }
+#ifdef LUTG_REC
             if (j == 3u && max_sym && nsym >= max_sym) goto out;
+#endif
             if (maintenance && j >= 4u) {
                 if (j == 4u) {
                     repn = USB_SERIAL_JTAG.ep1_conf.serial_in_ep_data_free ? 5u : 0u;
                     ++pops;
                 } else if (j == 6u && repn) {
-                    const uint32_t fill = (qw - (qr >> 1)) >> 1;
+                    const uint32_t fill = tx_ring_bytes(qw, qr, 1) >> 1;
                     repw = 0xB7u | (fill & 255u) << 8 | (fill >> 8) << 16 | (under > 255u ? 255u : under) << 24;
                 } else if (j >= 7u && j <= 10u && repn > 1u) {
                     USB_SERIAL_JTAG.ep1.val = (uint8_t)repw;
@@ -635,6 +661,7 @@ static uint32_t IRAM_ATTR __attribute__((noinline)) tx_p8_c(lut_io_t *io, uint8_
                     repn = 0;
                 } else if (j == 14u) {
 #ifndef LUTG_REC
+                    if (pops >= max_sym) goto out;
                     const uint32_t t = ccount();
                     if (qw != qw_seen) { qw_seen = qw; t_rx = t; }
                     else if (t - t_rx > (qw ? CPU_HZ / 2 : 3 * CPU_HZ)) goto out;
@@ -661,6 +688,8 @@ static uint32_t IRAM_ATTR __attribute__((noinline)) tx_a16_c(lut_io_t *io, uint8
     const uint32_t gs = 256u * S;
     const int32_t *r0 = T, *r1 = T + gs, *r2 = T + 2u * gs, *n0 = r0, *n1 = r1, *n2 = r2;
     uint32_t history = 0, qw = 0, qr = 0, under = 0, late = 0, nsym = 0;
+    qw = tx_counter_seed(1); qr = qw << 1;
+    qw += stream_prefill;
     uint32_t tn = ccount() + 20000u, phase = 0, qw_seen = 0, t_rx = ccount(), repw = 0;
     bool reporting = false;
 #ifdef LUTG_REC
@@ -684,19 +713,19 @@ static uint32_t IRAM_ATTR __attribute__((noinline)) tx_a16_c(lut_io_t *io, uint8
                 if ((int32_t)(2u * qw - qr) > 0) {
                     sym = (qb[(qr >> 1) & (LUT_RING_A16 - 1u)] >> ((qr & 1u) * 4u)) & 15u;
                     ++qr;
-                } else ++under;
+                } else { ++under; goto out; }
                 history = (history << 4) | sym;
                 n0 = T + (history & 255u) * S;
                 n1 = T + gs + ((history >> 8) & 255u) * S;
                 n2 = T + 2u * gs + ((history >> 16) & 255u) * S;
             } else if (j == 1u) {
                 if (step >= 8u) {
-                    if (qw - (qr >> 1) < LUT_RING_A16 - 64u && USB_SERIAL_JTAG.ep1_conf.serial_out_ep_data_avail)
+                    if (tx_ring_bytes(qw, qr, 1) < LUT_RING_A16 - 64u && USB_SERIAL_JTAG.ep1_conf.serial_out_ep_data_avail)
                         qb[qw++ & (LUT_RING_A16 - 1u)] = (uint8_t)USB_SERIAL_JTAG.ep1.val;
                 } else if (step == 0u) {
                     reporting = USB_SERIAL_JTAG.ep1_conf.serial_in_ep_data_free;
                 } else if (step == 1u) {
-                    const uint32_t fill = (qw - (qr >> 1)) >> 1;
+                    const uint32_t fill = tx_ring_bytes(qw, qr, 1) >> 1;
                     repw = 0xB7u | (fill & 255u) << 8 | (fill >> 8) << 16 | (under > 255u ? 255u : under) << 24;
                 } else if (step <= 5u) {
                     if (reporting) { USB_SERIAL_JTAG.ep1.val = (uint8_t)repw; repw >>= 8; }
@@ -714,7 +743,12 @@ static uint32_t IRAM_ATTR __attribute__((noinline)) tx_a16_c(lut_io_t *io, uint8
             else { r0 = n0; r1 = n1; r2 = n2; }
             word = ((uint32_t)*r0 + (uint32_t)*r1 + (uint32_t)*r2) ^ LUT_XOR;
         }
-        if (++nsym == max_sym && max_sym) goto out;
+        ++nsym;
+#ifdef LUTG_REC
+        if (nsym == max_sym && max_sym) goto out;
+#else
+        if (!(nsym & 2047u) && !--max_sym) goto out;
+#endif
     }
 out:
     io->qw = qw; io->qr = qr >> 1; io->under = under; io->lateness = late; io->stopped = false;
@@ -728,13 +762,11 @@ out:
  * point the six taps at their rows, 2 and 3 read one USB byte each (two bytes a symbol: the stream needs one), the fill report and the silence check sit in the
  * first 8 and the last symbol of every block of 2048, as in tx_a16_c. */
 static uint32_t IRAM_ATTR __attribute__((noinline)) tx_a32_c(lut_io_t *io, uint8_t *qb, const int32_t *T, uint32_t S, sample_clock_t clock, uint32_t max_sym, uint32_t *rec) {
-#ifndef LUTG_REC
-    uint32_t elapsed_blocks = 0;
-#endif
     const uint32_t gs = LUTA32_POINTS * S;
     const int32_t *r0 = T, *r1 = T + gs, *r2 = T + 2u * gs, *r3 = T + 3u * gs, *r4 = T + 4u * gs, *r5 = T + 5u * gs;
     const int32_t *n0 = r0, *n1 = r1, *n2 = r2, *n3 = r3, *n4 = r4, *n5 = r5;
     uint32_t history = 0, oldest = 0, qw = 0, qr = 0, under = 0, late = 0, nsym = 0;
+    qw = stream_prefill;
     uint32_t tn = ccount() + 20000u, phase = 0, qw_seen = 0, t_rx = ccount(), repw = 0;
     bool reporting = false;
 #ifdef LUTG_REC
@@ -759,7 +791,7 @@ static uint32_t IRAM_ATTR __attribute__((noinline)) tx_a32_c(lut_io_t *io, uint8
                     sym = qb[qr & (LUT_RING_A32 - 1u)] & 63u; ++qr;
                     if (sym >= LUTA32_POINTS) sym &= 31u;
                 }
-                else ++under;
+                else { ++under; goto out; }
                 oldest = (history >> 24) & 63u;
                 history = (history << 6) | sym;
                 n0 = T + (history & 63u) * S;
@@ -803,7 +835,7 @@ static uint32_t IRAM_ATTR __attribute__((noinline)) tx_a32_c(lut_io_t *io, uint8
 #else
         /* The production limit counts 2048-symbol blocks, allowing 24 hours.
          * Reports still use the low nsym bits when its diagnostic count wraps. */
-        if (!(nsym & 2047u) && ++elapsed_blocks == max_sym && max_sym) goto out;
+        if (!(nsym & 2047u) && !--max_sym) goto out;
 #endif
     }
 out:
@@ -885,15 +917,30 @@ static void tx_qpsk_lut(uint32_t fkhz, uint32_t baud_req, uint32_t sps, int32_t 
     rec = malloc(4 * (((psk8 || a16) && !a32 && sps == 8u ? 64 : LUTG_REC_SYMBOLS) * sps + 16));
     if ((fastg || p8c || a16c || a32c || a32fast) && !rec) { free(T); say("ERR out of memory\r\n"); return; }
 #endif
+    stream_prefill = 0;
+    usb_drain_rx();
+    lo_hz = pll_hz(fkhz / 1000u, (int)(fkhz % 1000u));
+    say("OK QPSKT LO %.0f BAUD %.3f OUT %.0f AMP %ld SPS %lu PERIOD %lu IF %.0f TARGET %ld MOD %s REM %lu DIV %lu SREM %lu SDIV %lu PLPTS %u PA %u PA_ARMED %u CLEAN_TX 1\r\n", lo_hz, baud, fso, (long)amp, (unsigned long)sps, (unsigned long)(p8c || a16c || a32c ? clock.period : period), ifh, (long)target, a32 ? "32APSK" : a16 ? "16APSK" : psk8 ? "8PSK" : "QPSK", (unsigned long)(p8c || a16c || a32c ? clock.remainder : 0), (unsigned long)(p8c || a16c || a32c ? clock.divisor : 1), (unsigned long)(symbol_average ? symbol_clock.remainder : 0), (unsigned long)(symbol_average ? symbol_clock.divisor : 1), a32 ? 4u : 0u, (unsigned)gpio_get_level(PA_ENABLE_GPIO), (unsigned)pa_enable);
+#ifndef LUTG_REC
+    if (target > 0) {
+        const uint32_t ring_size = a32 ? LUT_RING_A32 : a16 && !(fastg && sps == 8u) ? LUT_RING_A16 : LUT_RING_BYTES;
+        const unsigned shift = a32 || fast8 || (fastg && sps == 8u) ? 0u : psk8 || a16 ? 1u : fastg ? 2u : 0u;
+        uint32_t count = (uint32_t)target * 2u;
+        if (count > ring_size - 64u) count = ring_size - 64u;
+        count &= ~63u;  /* never wait for bytes a full-packet host cannot send */
+        stream_prefill = usb_prefill(ring, count, ring_size - 1u, tx_counter_seed(shift));
+        if (!stream_prefill) {
+            free(T);
+            say("ERR initial symbol buffer timed out\r\nTX END symbols=0 bytes_in=0 underruns=0 late_slots=0 (prefill timeout)\r\n");
+            usb_drain_rx();
+            return;
+        }
+    }
+#endif
     if (!tune(fkhz)) { free(T); say("ERR TUNE\r\n"); return; }
     const uint32_t owner0 = rd(SRAM_OWNER);
     pa_set(pa_enable);
-    if (pa_enable) esp_rom_delay_us(5000);    /* amplifier settles before RF starts */
-    phy_txforce(1);
-    esp_rom_delay_us(3000);
-    DAC_BUF[0] = 0;
-    usb_drain_rx();
-    say("OK QPSKT LO %.0f BAUD %.3f OUT %.0f AMP %ld SPS %lu PERIOD %lu IF %.0f TARGET %ld MOD %s REM %lu DIV %lu SREM %lu SDIV %lu PLPTS %u PA %u\r\n", lo_hz, baud, fso, (long)amp, (unsigned long)sps, (unsigned long)(p8c || a16c || a32c ? clock.period : period), ifh, (long)target, a32 ? "32APSK" : a16 ? "16APSK" : psk8 ? "8PSK" : "QPSK", (unsigned long)(p8c || a16c || a32c ? clock.remainder : 0), (unsigned long)(p8c || a16c || a32c ? clock.divisor : 1), (unsigned long)(symbol_average ? symbol_clock.remainder : 0), (unsigned long)(symbol_average ? symbol_clock.divisor : 1), a32 ? 4u : 0u, (unsigned)gpio_get_level(PA_ENABLE_GPIO));
+    if (pa_enable) esp_rom_delay_us(5000);    /* settle the PA while RF is still off */
     lut_io_t io = {0};
 #ifdef LUTG_REC
     esp_rom_delay_us(150000);                                        /* time for the host to put bytes into the USB FIFO (exercises the read slots) */
@@ -902,13 +949,13 @@ static void tx_qpsk_lut(uint32_t fkhz, uint32_t baud_req, uint32_t sps, int32_t 
     const uint32_t max_sym = (psk8 || a16) && sps == 8u ? 64 : LUTG_REC_SYMBOLS, mper = 3;
 #else
     const uint32_t mper = (psk8 || a16) && sps == 8u ? 256 : 2048;
-    /* 1 MBd APSK counts maintenance periods (2056 symbols), so the default
-     * 24-hour limit fits uint32_t instead of overflowing after ~8 minutes. */
-    const uint32_t max_sym = a32fast ? (uint32_t)ceil((double)secs * baud / 2050u)
-                          : a32c ? (uint32_t)ceil((double)secs * baud / 2048u)
-                          : a16 && sps == 8u && fastg
-                          ? (uint32_t)ceil((double)secs * baud / (8u * (mper + 1u)))
-                          : (uint32_t)((double)secs * baud) & ~7u;
+    /* Count whole maintenance blocks. Never convert seconds*baud to uint32:
+     * at 1 MBd that used to saturate at 2^32 symbols (71 min 35 s).
+     * Assembly changes only decrement immediates, preserving slot timing. */
+    const uint32_t block_symbols = a32fast ? 2050u
+                                : fastg ? (sps == 8u ? 8u * (mper + 1u) : mper + 3u)
+                                : 2048u;
+    const uint32_t max_sym = tx_duration_blocks(secs, baud_req, block_symbols);
 #endif
 #ifdef LUTG_REC
     if (p8c || a16c || a32c || a32fast) {
@@ -921,6 +968,8 @@ static void tx_qpsk_lut(uint32_t fkhz, uint32_t baud_req, uint32_t sps, int32_t 
     }
 #endif
     taskENTER_CRITICAL(&stream_mux);
+    DAC_BUF[0] = 0;  /* no stale replay word during RF enable */
+    phy_txforce(1);
     wr(SRAM_OWNER, (owner0 & ~7u) | 2u | 8u);
     __asm__ volatile("fence rw,rw" ::: "memory");
     wr(DAC_CTRL, rd(DAC_CTRL) & ~(1u << 31));
@@ -935,12 +984,15 @@ static void tx_qpsk_lut(uint32_t fkhz, uint32_t baud_req, uint32_t sps, int32_t 
                : sps == 4 ? tx_sym_lut_4(&io, ring, (const uint8_t *)T, period, max_sym, target == 0)
                      : sps == 8 ? tx_sym_lut_8(&io, ring, (const uint8_t *)T, period, max_sym, target == 0)
                                 : tx_sym_lut_16(&io, ring, (const uint8_t *)T, period, max_sym, target == 0);
+    /* Mute the physical RF path before disabling replay or allowing a task
+     * switch. Stopping DAC first used to leave a carrier during cleanup. */
+    pa_set(false);
+    rom_pbus_xpd_tx_off();
+    phy_txforce(0);
     DAC_BUF[0] = 0;
     wr(DAC_CTRL, rd(DAC_CTRL) & ~(1u << 31));
     wr(SRAM_OWNER, owner0);
     taskEXIT_CRITICAL(&stream_mux);
-    phy_txforce(0);
-    pa_set(false);
     tx_leave();
     free(T);
     vTaskDelay(pdMS_TO_TICKS(30));
@@ -1012,8 +1064,12 @@ static void tx_qpsk_lut(uint32_t fkhz, uint32_t baud_req, uint32_t sps, int32_t 
         say("\r\nT8 exit %lu late %lu\r\n", (unsigned long)c8.exitc, (unsigned long)c8.late);
     }
 #endif
+    /* qr can wrap in symbol units before qw wraps in bytes. The live fill
+     * is smaller than the ring, so discard the resulting alias in the log. */
+    const uint32_t ring_size = a32 ? LUT_RING_A32 : a16 && !(fastg && sps == 8u) ? LUT_RING_A16 : LUT_RING_BYTES;
+    const uint32_t fill_pairs = ((io.qw - io.qr) / 2u) & (ring_size / 2u - 1u);
     say("\r\nTX END symbols=%" PRIu32 " bytes_in=%" PRIu32 " underruns=%" PRIu32 " late_slots=%" PRIu32 " (lag bits 0x%" PRIx32 ") buffer=%" PRIu32 " pairs (%s)\r\n",
-        n * sps, io.qw, io.under, io.lateness, io.lag_or, (io.qw - io.qr) / 2, io.stopped ? "stop byte" : "host silent or time over");
+        n * sps, io.qw, io.under, io.lateness, io.lag_or, fill_pairs, io.stopped ? "stop byte" : "host silent or time over");
 }
 
 
@@ -1021,7 +1077,7 @@ static void tx_qpsk_lut(uint32_t fkhz, uint32_t baud_req, uint32_t sps, int32_t 
 
 static void handle(char *line) {
     if (!strcmp(line, "INFO")) {
-        say("ESP32DATV 1 PA_GPIO %u\r\n", (unsigned)PA_ENABLE_GPIO);
+        say("ESP32DATV 1 PA_GPIO %u CLEAN_TX 1\r\n", (unsigned)PA_ENABLE_GPIO);
     } else if (!strcmp(line, "PA")) {
         say("PA GPIO %u ARMED %u LEVEL %u\r\n", (unsigned)PA_ENABLE_GPIO,
             (unsigned)pa_requested, (unsigned)gpio_get_level(PA_ENABLE_GPIO));

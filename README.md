@@ -104,7 +104,8 @@ the receiver after changing symbol rate if it loses lock. The current 32APSK loo
 supports 2–250 kS/s. Use `--apsk-pl unit` with SDRangel: it gives PLHEADER and pilots
 their own unit-radius points. The default `outer` keeps the existing outer-ring
 normalization. 16APSK is unchanged.
-Stop with Ctrl-C; the ESP also stops after about 0.5 seconds without USB data.
+Stop with Ctrl-C. RF starts after the symbol buffer is filled and switches off
+when it drains; a USB underrun also stops transmission.
 
 Useful options:
 

@@ -256,18 +256,23 @@ def ev_adv():
     return ["    slli t5, gp, 1", "    add  t5, t5, gp", "    add  a7, a7, t5"], 3
 
 
-def ev_under():
-    return ["    lw   t5, UNDER(s0)", "    xori t6, gp, 1", "    add  t5, t5, t6", "    sw   t5, UNDER(s0)"], 4
+def ev_under(stubs):
+    # Replace the 32-bit counter store, preserving every timed slot's size.
+    dry = lab("dry")
+    stubs.append(f"{dry}:\n    j    lutg_p8s8_empty")
+    op = "    sw   t5, UNDER(s0)" if REC != "none" else f"    bnez t5, {dry}"
+    return ["    lw   t5, UNDER(s0)", "    xori t6, gp, 1", "    add  t5, t5, t6", op], 4
 
 
 def ev_tgt():
     return [f"    addi a1, a1, {SYNC}"], 1
 
 
-def ev_nsym(stubs):
+def ev_nsym(stubs, copy):
     x = lab("x")
     stubs.append(f"{x}:\n    j    lutg_p8s8_exit")
-    return ["    lw   tp, NSYM(s0)", f"    addi tp, tp, -{NSYM}", "    sw   tp, NSYM(s0)", f"    beqz tp, {x}"], 4
+    step = -NSYM if REC != "none" else -1 if copy == "M" else 0
+    return ["    lw   tp, NSYM(s0)", f"    addi tp, tp, {step}", "    sw   tp, NSYM(s0)", f"    beqz tp, {x}"], 4
 
 
 def ev_mcn_a():
@@ -349,8 +354,8 @@ def build_pass(c, stubs):
         if k % 2 == 1:
             at(k, 5, ev_tgt())
     assert v == V0, f"window not periodic: {v}"
-    at(0, 6, ev_nsym(stubs[0]))
-    at(0, 7, ev_under())                      # counts the record flag (gp) of the previous pass; nothing between touches gp (the maintenance events use it later in the pass)
+    at(0, 6, ev_nsym(stubs[0], c))
+    at(0, 7, ev_under(stubs[0]))                      # counts the record flag (gp) of the previous pass; nothing between touches gp (the maintenance events use it later in the pass)
     at(6, 7, ev_have(), ev_adv())
     if c == "N":
         at(4, 7, ev_mcn_a(), ev_mcn_b())
@@ -434,6 +439,8 @@ def function():
     .type lutg_p8s8_run_p20, @function
     .align 4
 lutg_p8s8_run_p20:
+    .option push
+    .option rvc
     addi sp, sp, -64
     sw   ra, 0(sp)
     sw   s0, 4(sp)
@@ -450,6 +457,8 @@ lutg_p8s8_run_p20:
     sw   s11, 48(sp)
     sw   gp, 52(sp)
     sw   tp, 56(sp)
+    .option pop
+    .balign 4
     mv   s0, a0
     li   a3, 0x60043000         /* USB Serial/JTAG */
     li   a5, 0x80200            /* offset binary -> two's complement, both fields */
@@ -518,10 +527,17 @@ lutg_p8s8_run_p20:
 """]
     for c in COPIES:
         f.append(copy_code(c, pads))
-    f.append("""lutg_p8s8_exit:
+    f.append("""lutg_p8s8_empty:
+    li   t5, 1
+    sw   t5, UNDER(s0)
+    li   t5, 3
+    sw   t5, EXITC(s0)
+lutg_p8s8_exit:
     sw   s11, QW(s0)
     sw   a7, QR(s0)
     sw   a0, RECP(s0)
+    .option push
+    .option rvc
     lw   ra, 0(sp)
     lw   s0, 4(sp)
     lw   s1, 8(sp)
@@ -540,6 +556,7 @@ lutg_p8s8_run_p20:
     addi sp, sp, 64
     li   a0, 0
     ret
+    .option pop
     .size lutg_p8s8_run_p20, . - lutg_p8s8_run_p20
 """)
     return "\n".join(f)

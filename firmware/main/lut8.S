@@ -7,6 +7,10 @@
     .type lut8_run, @function
     .align 4
 lut8_run:
+    /* Compress only the cold stack save/restore to leave IRAM headroom.
+     * All timed sample slots keep their original instructions and padding. */
+    .option push
+    .option rvc
     addi sp, sp, -64
     sw   ra, 0(sp)
     sw   s0, 4(sp)
@@ -21,6 +25,8 @@ lut8_run:
     sw   s9, 40(sp)
     sw   s10, 44(sp)
     sw   s11, 48(sp)
+    .option pop
+    .balign 4
     mv   s0, a0
     lw   s1, 0(s0)              /* T0 */
     lw   s2, 4(s0)              /* T1 */
@@ -1031,7 +1037,7 @@ lut8_copy_N:
     add  a7, a7, t5
     lw   t5, 28(s0)
     add  t5, t5, t4
-    sw   t5, 28(s0)
+    bnez t5, .LdryN
     .rept 6
     nop
     .endr
@@ -1042,7 +1048,7 @@ lut8_copy_N:
     lw   t1, 28(a1)
     add  t0, t0, t1
     xor  t3, t0, a5
-    addi a4, a4, -1
+    addi a4, a4, 0
     bnez a4, .Lok41
     j    lut8_exit
 .Lok41:
@@ -1057,6 +1063,8 @@ lut8_copy_N:
     j    lut8_copy_N
 .Lgm42:
     j    lut8_copy_M
+.LdryN:
+    j    lut8_empty
     .align 4
 lut8_copy_M:
 /* M symbol 7 slot 7 (previous superpass) */
@@ -2124,7 +2132,7 @@ lut8_copy_M:
     add  a7, a7, t5
     lw   t5, 28(s0)
     add  t5, t5, t4
-    sw   t5, 28(s0)
+    bnez t5, .LdryM
     .rept 6
     nop
     .endr
@@ -2150,6 +2158,8 @@ lut8_copy_M:
     j    lut8_copy_N
 .Lgm99:
     j    lut8_copy_M
+.LdryM:
+    j    lut8_empty
 .Lsh3:
     blt  zero, t5, .Lsw1
     j    .Lsx2
@@ -2198,10 +2208,17 @@ lut8_copy_M:
 .Lsh95:
     blt  zero, t5, .Lsw93
     j    .Lsx94
+lut8_empty:
+    li   t5, 1
+    sw   t5, 28(s0)
+    li   t5, 3
+    sw   t5, 56(s0)
 lut8_exit:
     sw   s11, 12(s0)
     sw   a7, 16(s0)
     sw   a4, 24(s0)
+    .option push
+    .option rvc
     lw   ra, 0(sp)
     lw   s0, 4(sp)
     lw   s1, 8(sp)
@@ -2217,5 +2234,6 @@ lut8_exit:
     lw   s11, 48(sp)
     addi sp, sp, 64
     ret
+    .option pop
     .size lut8_run, . - lut8_run
 

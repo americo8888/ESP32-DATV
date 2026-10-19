@@ -39,6 +39,8 @@
     .type lutg_a16_run_p20, @function
     .align 4
 lutg_a16_run_p20:
+    .option push
+    .option rvc
     addi sp, sp, -64
     sw   ra, 0(sp)
     sw   s0, 4(sp)
@@ -55,6 +57,8 @@ lutg_a16_run_p20:
     sw   s11, 48(sp)
     sw   gp, 52(sp)
     sw   tp, 56(sp)
+    .option pop
+    .balign 4
     mv   s0, a0
     li   a3, 0x60043000         /* USB Serial/JTAG */
     li   a5, 0x80200            /* offset binary -> two's complement, both fields */
@@ -239,7 +243,7 @@ lutg_a16_copy_N:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryN
     lw   s5, T0(s0)
     andi t5, a2, 255
     mul  t5, t5, s4
@@ -412,7 +416,7 @@ lutg_a16_copy_N:
     add  t0, t0, t1
     add  t0, t0, t2
     xor  t3, t0, a5
-    addi tp, tp, -1
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .LxN
     lw   tp, MCNT(s0)
@@ -553,6 +557,8 @@ lutg_a16_copy_N:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg_a16_exit
+.LdryN:
+    j    lutg_a16_empty
     .align 4
 lutg_a16_copy_A:
     .option push
@@ -694,7 +700,7 @@ lutg_a16_copy_A:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryA
     lw   s5, T0(s0)
     andi t5, a2, 255
     mul  t5, t5, s4
@@ -875,7 +881,7 @@ lutg_a16_copy_A:
     add  t0, t0, t1
     add  t0, t0, t2
     xor  t3, t0, a5
-    addi tp, tp, -1
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .LxA
     nop
@@ -1003,6 +1009,8 @@ lutg_a16_copy_A:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg_a16_exit
+.LdryA:
+    j    lutg_a16_empty
     .align 4
 lutg_a16_copy_B:
     .option push
@@ -1144,7 +1152,7 @@ lutg_a16_copy_B:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryB
     lw   s5, T0(s0)
     andi t5, a2, 255
     mul  t5, t5, s4
@@ -1310,7 +1318,7 @@ lutg_a16_copy_B:
     add  t0, t0, t1
     add  t0, t0, t2
     xor  t3, t0, a5
-    addi tp, tp, -1
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .LxB
     nop
@@ -1438,6 +1446,8 @@ lutg_a16_copy_B:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg_a16_exit
+.LdryB:
+    j    lutg_a16_empty
     .align 4
 lutg_a16_copy_C:
     .option push
@@ -1579,7 +1589,7 @@ lutg_a16_copy_C:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .LdryC
     lw   s5, T0(s0)
     andi t5, a2, 255
     mul  t5, t5, s4
@@ -1876,10 +1886,19 @@ lutg_a16_copy_C:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg_a16_exit
+.LdryC:
+    j    lutg_a16_empty
+lutg_a16_empty:
+    li   t5, 1
+    sw   t5, UNDER(s0)
+    li   t5, 3
+    sw   t5, EXITC(s0)
 lutg_a16_exit:
     sw   s11, QW(s0)
     sw   a7, QR(s0)
     sw   a0, RECP(s0)
+    .option push
+    .option rvc
     lw   ra, 0(sp)
     lw   s0, 4(sp)
     lw   s1, 8(sp)
@@ -1898,5 +1917,6 @@ lutg_a16_exit:
     addi sp, sp, 64
     li   a0, 0
     ret
+    .option pop
     .size lutg_a16_run_p20, . - lutg_a16_run_p20
 
