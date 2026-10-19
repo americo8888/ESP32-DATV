@@ -1,0 +1,18 @@
+calibration cal.json: DC [-1.401, 2.938] codes, Q gain 0.99944, Q phase 0.079 deg
+OK QPSKT LO 2369971619 BAUD 1000000.000 OUT 8000000 AMP 300 SPS 8 PERIOD 20 IF 0 TARGET 7000 MOD 16APSK REM 0 DIV 1 SREM 0 SDIV 1
+spectrum centre 2370.000059 MHz (requested 2370.000000), 1000000.0 Bd, DVB-S2 16APSK normal frame, pilots FEC 2/3, RRC 0.35 occupies 1350 kHz, TS capacity 2575 kb/s
+  ESP buffer 0..6644 pairs, TS packets: 0 from the source, 3736 null
+  ESP buffer 5276..6658 pairs, TS packets: 0 from the source, 7136 null
+  ESP buffer 5444..6690 pairs, TS packets: 0 from the source, 10568 null
+  ESP buffer 5898..6644 pairs, TS packets: 0 from the source, 13992 null
+  ESP buffer 5942..6660 pairs, TS packets: 0 from the source, 17424 null
+  ESP buffer 6016..6698 pairs, TS packets: 0 from the source, 20848 null
+  ESP buffer 6012..6688 pairs, TS packets: 0 from the source, 24272 null
+  ESP buffer 5480..6640 pairs, TS packets: 0 from the source, 27704 null
+  ESP buffer 5758..6694 pairs, TS packets: 0 from the source, 31128 null
+  ESP buffer 5778..6684 pairs, TS packets: 0 from the source, 34560 null
+  ESP buffer 4886..6576 pairs, TS packets: 0 from the source, 37968 null
+  ESP buffer 5238..6554 pairs, TS packets: 0 from the source, 41416 null
+  ESP buffer 5560..6658 pairs, TS packets: 0 from the source, 44840 null
+  ESP buffer 5038..6618 pairs, TS packets: 0 from the source, 48272 null
+TX END symbols=238216384 bytes_in=14599552 underruns=72242 late_slots=0 (lag bits 0x0) buffer=0 pairs (host silent or time over)

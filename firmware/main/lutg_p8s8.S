@@ -36,6 +36,8 @@
     .type lutg_p8s8_run_p20, @function
     .align 4
 lutg_p8s8_run_p20:
+    .option push
+    .option rvc
     addi sp, sp, -64
     sw   ra, 0(sp)
     sw   s0, 4(sp)
@@ -52,6 +54,8 @@ lutg_p8s8_run_p20:
     sw   s11, 48(sp)
     sw   gp, 52(sp)
     sw   tp, 56(sp)
+    .option pop
+    .balign 4
     mv   s0, a0
     li   a3, 0x60043000         /* USB Serial/JTAG */
     li   a5, 0x80200            /* offset binary -> two's complement, both fields */
@@ -292,7 +296,7 @@ lutg_p8s8_copy_N0:
     add  t0, t0, t2
     add  t0, t0, t4
     xor  t3, t0, a5
-    addi tp, tp, -8
+    addi tp, tp, 0
     sw   tp, NSYM(s0)
     beqz tp, .Lx17
     nop
@@ -321,7 +325,7 @@ lutg_p8s8_copy_N0:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .Ldry18
     nop
     .option push
     .option rvc
@@ -538,6 +542,8 @@ lutg_p8s8_copy_N0:
     j    .Lrb4
 .Lx17:
     j    lutg_p8s8_exit
+.Ldry18:
+    j    lutg_p8s8_empty
 .LhN0:
     bgtz t5, .LhN0e
     lw   t6, LATE(s0)
@@ -1992,9 +1998,9 @@ lutg_p8s8_copy_M0:
     add  t0, t0, t2
     add  t0, t0, t4
     xor  t3, t0, a5
-    addi tp, tp, -8
+    addi tp, tp, -1
     sw   tp, NSYM(s0)
-    beqz tp, .Lx18
+    beqz tp, .Lx19
     nop
     .option push
     .option rvc
@@ -2021,7 +2027,7 @@ lutg_p8s8_copy_M0:
     xor  t3, t0, a5
     xori t6, gp, 1
     add  t5, t5, t6
-    sw   t5, UNDER(s0)
+    bnez t5, .Ldry20
     nop
     .option push
     .option rvc
@@ -2218,8 +2224,10 @@ lutg_p8s8_copy_M0:
     xor  t3, t0, a5
     nop
     jalr x0, 0(t6)
-.Lx18:
+.Lx19:
     j    lutg_p8s8_exit
+.Ldry20:
+    j    lutg_p8s8_empty
 .LhM0:
     bgtz t5, .LhM0e
     lw   t6, LATE(s0)
@@ -2392,7 +2400,7 @@ lutg_p8s8_copy_M1:
     add  t0, t0, t2
     add  t0, t0, t4
     xor  t3, t0, a5
-    bltu t5, t6, .Ls19
+    bltu t5, t6, .Ls21
     snez t6, s11
     neg  t6, t6
     nop
@@ -2648,7 +2656,7 @@ lutg_p8s8_copy_M1:
     xor  t3, t0, a5
     nop
     jalr x0, 0(t6)
-.Ls19:
+.Ls21:
     li   t5, 2
     sw   t5, EXITC(s0)
     j    lutg_p8s8_exit
@@ -3460,10 +3468,17 @@ lutg_p8s8_copy_M3:
     li   t6, 24
     blt  t6, t5, .LhM3e
     j    .LbM3
+lutg_p8s8_empty:
+    li   t5, 1
+    sw   t5, UNDER(s0)
+    li   t5, 3
+    sw   t5, EXITC(s0)
 lutg_p8s8_exit:
     sw   s11, QW(s0)
     sw   a7, QR(s0)
     sw   a0, RECP(s0)
+    .option push
+    .option rvc
     lw   ra, 0(sp)
     lw   s0, 4(sp)
     lw   s1, 8(sp)
@@ -3482,5 +3497,6 @@ lutg_p8s8_exit:
     addi sp, sp, 64
     li   a0, 0
     ret
+    .option pop
     .size lutg_p8s8_run_p20, . - lutg_p8s8_run_p20
 

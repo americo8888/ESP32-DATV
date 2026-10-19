@@ -14,6 +14,10 @@ BAND = (2300.0, 2450.0)          # MHz, the 13 cm amateur band; the firmware ref
 def find_port(port=None):
     if port:
         return port
+    # A tinySA can also occupy ttyACM0. Prefer the ESP's native USB identity.
+    native = sorted(glob.glob("/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00"))
+    if native:
+        return native[0]
     ports = sorted(glob.glob("/dev/ttyACM*"))
     if not ports:
         raise SystemExit("no /dev/ttyACM*: is the board plugged in?")
@@ -28,14 +32,25 @@ class Link:
             self.s.write(b"\nINFO\n")
             t0 = time.time()
             got = b""
-            while time.time() - t0 < 0.7 and b"ESP32DATV" not in got:
+            while time.time() - t0 < 0.7:
                 got += self.s.read(4096)
+                if any(line.startswith(b"ESP32DATV ") and line.endswith(b"\n")
+                       for line in got.splitlines(keepends=True)):
+                    break
                 time.sleep(0.02)
-            if b"ESP32DATV" in got:
+            if any(line.startswith(b"ESP32DATV ") and line.endswith(b"\n")
+                   for line in got.splitlines(keepends=True)):
                 break
         else:
             raise SystemExit("the ESP does not answer INFO (flash firmware/ first, or reset the board)")
         time.sleep(0.1)
+        info = next((line for line in got.decode(errors="replace").splitlines()
+                     if line.startswith("ESP32DATV ")), "")
+        fields = info.split()[2:]
+        capabilities = dict(zip(fields[::2], fields[1::2]))
+        self.pa_gpio = int(capabilities["PA_GPIO"]) if "PA_GPIO" in capabilities else None
+        self.clean_tx = capabilities.get("CLEAN_TX") == "1"
+        self.streaming = False
         self.s.reset_input_buffer()
         self.buf = b""
         self.text = b""
@@ -43,6 +58,28 @@ class Link:
         self.under = 0             # ring underruns (saturates at 255)
         self.sent_since = 0        # pairs sent since the last report
         self.reports = 0
+
+    def configure_pa(self, enabled, timeout=3.0):
+        """Arm PA for the next TX; firmware keeps the output low while idle."""
+        if self.pa_gpio is None:
+            if enabled:
+                raise SystemExit("Firmware has no PA enable support; build and flash firmware/ first")
+            return
+        self.text = b""
+        self.s.write(f"PA {int(enabled)}\n".encode())
+        expected = f"OK PA {int(enabled)} GPIO {self.pa_gpio}"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.poll()
+            for line in self.text.decode(errors="replace").split("\n")[:-1]:
+                line = line.rstrip("\r")
+                if line == expected:
+                    self.text = b""
+                    return
+                if line.startswith("ERR"):
+                    raise SystemExit(f"ESP: {line}")
+            time.sleep(.01)
+        raise SystemExit("ESP did not acknowledge PA enable configuration")
 
     def poll(self):
         data = self.s.read(65536)
@@ -69,8 +106,11 @@ class Link:
         t0 = time.time()
         while time.time() - t0 < timeout:
             self.poll()
-            for ln in self.text.decode(errors="replace").splitlines():
+            for ln in self.text.decode(errors="replace").split("\n")[:-1]:
+                ln = ln.rstrip("\r")
                 if ln.startswith("OK QPSKT"):
+                    fields = ln.split()[2:]
+                    self.streaming = int(dict(zip(fields[::2], fields[1::2])).get("TARGET", "0")) > 0
                     return ln
                 if ln.startswith("ERR"):
                     raise SystemExit(f"ESP: {ln}")
@@ -80,10 +120,16 @@ class Link:
     def send(self, data):
         self.s.write(data)
 
-    def finish(self, timeout=5.0):
-        """Stop byte (ends the PRBS test at once; a streaming transmitter stops 0.5 s after the last byte), then the 'TX END' line."""
+    def finish(self, timeout=5.0, send_stop=True):
+        """Wait for TX END, optionally sending the legacy stop marker.
+
+        CLEAN_TX firmware shuts RF off when its symbol buffer drains. Never
+        append a stop marker to that raw stream: it would be transmitted as data.
+        Legacy firmware and on-device PRBS mode retain their previous stop path.
+        """
         try:
-            self.s.write(b"\xA5\xFF")
+            if send_stop and not (self.clean_tx and self.streaming):
+                self.s.write(b"\xA5\xFF")
         except serial.SerialException:
             pass
         t0 = time.time()
